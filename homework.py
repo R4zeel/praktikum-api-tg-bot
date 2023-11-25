@@ -41,7 +41,6 @@ handler.setFormatter(formatter)
 
 def check_tokens():
     """Проверяет доступность переменных окружения."""
-
     tokens = [
         PRACTICUM_TOKEN,
         TELEGRAM_TOKEN,
@@ -49,7 +48,7 @@ def check_tokens():
     ]
 
     for token in tokens:
-        if len(token) == 0:
+        if not token:
             logger.critical('Insufficient env variables',
                             exc_info=True)
             return False
@@ -58,7 +57,6 @@ def check_tokens():
 
 def send_message(bot, message):
     """Отправляет сообщение в Telegram чат."""
-
     try:
         bot.send_message(
             chat_id=TELEGRAM_CHAT_ID,
@@ -67,45 +65,45 @@ def send_message(bot, message):
         logger.debug('message sent successfully', exc_info=True)
     except Exception as error:
         logger.error(error, exc_info=True)
-        raise Exception('Message could not be sent')
 
 
 def get_api_answer(timestamp):
     """Делает запрос к API."""
-
     try:
         api_answer = requests.get(
             ENDPOINT,
             headers=HEADERS,
             params={'from_date': timestamp}
-        ).json()
-        if check_response(api_answer):
-            return api_answer
-    except ConnectionError:
-        logger.error('Endpoint is not accessible', exc_info=True)
-    except Exception as error:
-        logger.error(error, exc_info=True)
-    return None
+        )
+    except requests.RequestException:
+        logger.error('Status error', exc_info=True)
+    finally:
+        if not api_answer.status_code == 200:
+            logger.error(f'Response status: {api_answer.status_code}')
+        if check_response(api_answer.json()):
+            return api_answer.json()
 
 
 def check_response(response: dict):
     """Проверяет ответ API на соответствие документации."""
-
     api_correct_response = {
         'homeworks': None,
         'current_date': None,
     }
-
-    for key in api_correct_response:
-        if key not in response:
-            logger.error('Insufficient dict keys', exc_info=True)
-            return False
+    if type(response) is not dict:
+        logger.exception('Response is not dict')
+        raise TypeError
+    elif type(response['homeworks']) is not list:
+        logger.exception('Wrong homeworks type')
+        raise TypeError
+    elif 'homeworks' not in response:
+        logger.error('Insufficient dict keys', exc_info=True)
+        raise KeyError
     return True
 
 
 def parse_status(homework):
     """Извлекает статус домашней работы."""
-
     status = get_api_answer(homework)
     status = status.get('homeworks')
     try:
@@ -137,27 +135,25 @@ def parse_status(homework):
 
 def main():
     """Основная логика работы бота."""
-
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     previous_status = str()
 
-    if check_tokens():
-        while True:
-            try:
-                status = parse_status(timestamp)
-                if status == previous_status:
-                    logger.debug('No new statuses found', exc_info=True)
-                    continue
-                previous_status = status
-                send_message(bot, status)
-            except Exception as error:
-                message = f'Сбой в работе программы: {error}'
-                logger.error(error, exc_info=True)
-                send_message(bot, message)
-            time.sleep(600)
-    else:
-        raise 'Не хватает необходимых токенов'
+    while True:
+        try:
+            if not check_tokens():
+                raise SystemExit
+            status = parse_status(timestamp)
+            if status == previous_status:
+                logger.debug('No new statuses found', exc_info=True)
+                continue
+            previous_status = status
+            send_message(bot, status)
+        except Exception as error:
+            message = f'Сбой в работе программы: {error}'
+            logger.error(error, exc_info=True)
+            send_message(bot, message)
+        time.sleep(600)
 
 
 if __name__ == '__main__':
