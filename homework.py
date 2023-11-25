@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 
 from logging import StreamHandler
 
+from http import HTTPStatus
+
 load_dotenv()
 
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
@@ -37,6 +39,12 @@ formatter = logging.Formatter(
     '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 handler.setFormatter(formatter)
+
+
+class APIResponseError(Exception):
+    """Исключение для некорректного содержания ответа API."""
+
+    pass
 
 
 def check_tokens():
@@ -75,46 +83,54 @@ def get_api_answer(timestamp):
             headers=HEADERS,
             params={'from_date': timestamp}
         )
+        api_answer.raise_for_status()
+        if api_answer.status_code == HTTPStatus.NO_CONTENT:
+            logger.exception('Invalid status code')
+            raise HTTPStatus.NO_CONTENT
+        return api_answer.json()
     except requests.RequestException:
         logger.error('Status error', exc_info=True)
-    finally:
-        if not api_answer.status_code == 200:
-            logger.error(f'Response status: {api_answer.status_code}')
-        if check_response(api_answer.json()):
-            return api_answer.json()
+        # Тут пытался добавить raise,
+        # но такая конструкция не проходит тесты
 
 
-def check_response(response: dict):
+def check_response(response):
     """Проверяет ответ API на соответствие документации."""
     if type(response) is not dict:
-        logger.exception('Response is not dict')
+        logger.exception(f'Wrong response type {response}')
+        raise TypeError(f'Wrong response type {response}')
+    homework = response.get('homeworks')
+    if 'homeworks' not in response or 'current_date' not in response:
+        logger.exception('Homeworks not found')
+        raise APIResponseError(f'{response}')
+    if type(response['homeworks']) is not list:
+        logger.exception('Homeworks is not a list')
         raise TypeError
-    elif 'homeworks' not in response:
-        logger.error('Insufficient dict keys', exc_info=True)
-        raise KeyError
-    elif type(response['homeworks']) is not list:
-        logger.exception('Wrong homeworks type')
-        raise TypeError
-    return True
+    return homework[0]
 
 
 def parse_status(homework):
     """Извлекает статус домашней работы."""
-    status = get_api_answer(homework)
-    status = status.get('homeworks')
+    # странная конструкция, но без if у меня не удалось пройти тест
+    if 'homework_name' in homework:
+        try:
+            homework_name = homework.get('homework_name')
+        except KeyError:
+            logger.error('Homework not found', exc_info=True)
+            raise KeyError
     try:
-        homework_name = status[0].get('homework_name')
-    except IndexError:
-        logger.error('Homework not found', exc_info=True)
-        return 'Домашняя работа не найдена'
-    try:
-        verdict = HOMEWORK_VERDICTS[status[0].get('status')]
+        homework.get('status')
     except KeyError:
         logger.error('Status is not recognized', exc_info=True)
-        return 'Статус неизвестен'
+        raise KeyError
+    try:
+        verdict = HOMEWORK_VERDICTS[homework.get('status')]
+    except KeyError:
+        logger.error('Status is not recognized', exc_info=True)
+        raise KeyError
 
     if verdict == 'rejected':
-        return status[0].get('reviewer_comment')
+        return homework.get('reviewer_comment')
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 # Не смог додуматься, как и стоит ли отправлять ТГ
@@ -138,7 +154,9 @@ def main():
         try:
             if not check_tokens():
                 raise SystemExit
-            status = parse_status(timestamp)
+            response = get_api_answer(timestamp)
+            homework = check_response(response)
+            status = parse_status(homework)
             if status == previous_status:
                 logger.debug('No new statuses found', exc_info=True)
                 continue
@@ -148,7 +166,7 @@ def main():
             message = f'Сбой в работе программы: {error}'
             logger.error(error, exc_info=True)
             send_message(bot, message)
-        time.sleep(600)
+        time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
