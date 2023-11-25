@@ -89,12 +89,12 @@ def check_response(response: dict):
     if type(response) is not dict:
         logger.exception('Response is not dict')
         raise TypeError
-    elif type(response['homeworks']) is not list:
-        logger.exception('Wrong homeworks type')
-        raise TypeError
     elif 'homeworks' not in response:
         logger.error('Insufficient dict keys', exc_info=True)
         raise KeyError
+    elif type(response['homeworks']) is not list:
+        logger.exception('Wrong homeworks type')
+        raise TypeError
     return True
 
 
@@ -111,8 +111,7 @@ def parse_status(homework):
         verdict = HOMEWORK_VERDICTS[status[0].get('status')]
     except KeyError:
         logger.error('Status is not recognized', exc_info=True)
-        verdict = status[0].get('status')
-        return f'Неизвестный статус: {verdict}'
+        return 'Статус неизвестен'
 
     if verdict == 'rejected':
         return status[0].get('reviewer_comment')
