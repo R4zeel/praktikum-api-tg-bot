@@ -86,10 +86,6 @@ def get_api_answer(timestamp):
 
 def check_response(response: dict):
     """Проверяет ответ API на соответствие документации."""
-    api_correct_response = {
-        'homeworks': None,
-        'current_date': None,
-    }
     if type(response) is not dict:
         logger.exception('Response is not dict')
         raise TypeError
