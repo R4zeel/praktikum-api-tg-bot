@@ -1,18 +1,16 @@
 import sys
+import os
+import time
+import json
 
 import telegram
-
 import logging
-import os
 import requests
 
-import time
+from http import HTTPStatus
 
 from dotenv import load_dotenv
 
-from logging import StreamHandler
-
-from http import HTTPStatus
 
 load_dotenv()
 
@@ -32,7 +30,7 @@ HOMEWORK_VERDICTS = {
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-handler = StreamHandler()
+handler = logging.StreamHandler()
 handler.setStream(sys.stdout)
 logger.addHandler(handler)
 formatter = logging.Formatter(
@@ -57,8 +55,10 @@ def check_tokens():
 
     for token in tokens:
         if not token:
-            logger.critical('Insufficient env variables',
-                            exc_info=True)
+            logger.critical(
+                f'Insufficient token: {token}',
+                exc_info=True
+            )
             return False
     return True
 
@@ -83,77 +83,76 @@ def get_api_answer(timestamp):
             headers=HEADERS,
             params={'from_date': timestamp}
         )
-        api_answer.raise_for_status()
-        if api_answer.status_code == HTTPStatus.NO_CONTENT:
-            logger.exception('Invalid status code')
-            raise HTTPStatus.NO_CONTENT
-        return api_answer.json()
-    except requests.RequestException:
-        logger.error('Status error', exc_info=True)
-        # Тут пытался добавить raise,
-        # но такая конструкция не проходит тесты
+        # Думал такой конструкцией проверять ошибку при получении
+        # ответа(RequestException для этого не подойдёт?), но судя по
+        # всему, из-за того, что в тестах используются данного типа -
+        # на тестах получаю ошибку.
+        # if not isinstance(api_answer, requests.Response):
+        #     raise APIResponseError(
+        #         f'Wrong response: {type(api_answer)}'
+        #     )
+        if api_answer.status_code != HTTPStatus.OK:
+            raise APIResponseError(
+                f'Failed request: {api_answer}. '
+                f'Status code: {api_answer.status_code}.'
+            )
+        try:
+            return api_answer.json()
+        except json.JSONDecodeError:
+            raise APIResponseError('Response is not parsable')
+    except requests.RequestException as error:
+        logger.error(f'Request error: {error}', exc_info=True)
+        # Пытался добавлять RequestException в raise,
+        # так не работало - получаю ошибку о том, что
+        # при таком исключении оно не обрабатывается.
+        # Добавил кастомный класс исключений - тест прошёл.
+        raise APIResponseError(f'Request error: {error}')
 
 
 def check_response(response):
     """Проверяет ответ API на соответствие документации."""
-    if type(response) is not dict:
-        logger.exception(f'Wrong response type {response}')
+    if not isinstance(response, dict):
         raise TypeError(f'Wrong response type {response}')
     homework = response.get('homeworks')
     if 'homeworks' not in response or 'current_date' not in response:
-        logger.exception('Homeworks not found')
         raise APIResponseError(f'{response}')
-    if type(response['homeworks']) is not list:
-        logger.exception('Homeworks is not a list')
-        raise TypeError
-    return homework[0]
+    if not isinstance(response['homeworks'], list):
+        raise TypeError(f'homeworks is not a list: {type(homework)}')
+    if homework:
+        return homework[0]
+    return homework
 
 
 def parse_status(homework):
     """Извлекает статус домашней работы."""
-    # странная конструкция, но без if у меня не удалось пройти тест
-    if 'homework_name' in homework:
-        try:
+    if isinstance(homework, dict):
+        if 'homework_name' in homework:
             homework_name = homework.get('homework_name')
-        except KeyError:
-            logger.error('Homework not found', exc_info=True)
-            raise KeyError
-    try:
-        homework.get('status')
-    except KeyError:
-        logger.error('Status is not recognized', exc_info=True)
-        raise KeyError
+        else:
+            raise KeyError('Homework not found')
+    else:
+        raise TypeError('Homework is not a dict')
     try:
         verdict = HOMEWORK_VERDICTS[homework.get('status')]
     except KeyError:
-        logger.error('Status is not recognized', exc_info=True)
-        raise KeyError
+        raise KeyError('Status is not recognized')
 
     if verdict == 'rejected':
         return homework.get('reviewer_comment')
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
-# Не смог додуматься, как и стоит ли отправлять ТГ
-# сообщения об ошибках из функций выше - объявлять
-# для таких сообщений отдельную функцию? Также не знаю,
-# как при отправке таких сообщений обойтись без
-# использования циклов с переменной запоминающей
-# предыдущее значение. Если нужно отправлять сообщение
-# один раз - то такую конструкицю придётся использовать
-# при каждом логгировании. Ограничился ошибками в ТГ
-# только в main функции.
-
 
 def main():
     """Основная логика работы бота."""
-    bot = telegram.Bot(token=TELEGRAM_TOKEN)
+    if check_tokens():
+        bot = telegram.Bot(token=TELEGRAM_TOKEN)
+    else:
+        raise SystemExit('Insufficient tokens')
     timestamp = int(time.time())
-    previous_status = str()
+    previous_status = ''
 
     while True:
         try:
-            if not check_tokens():
-                raise SystemExit
             response = get_api_answer(timestamp)
             homework = check_response(response)
             status = parse_status(homework)
@@ -167,6 +166,7 @@ def main():
             logger.error(error, exc_info=True)
             send_message(bot, message)
         time.sleep(RETRY_PERIOD)
+        timestamp = int(time.time())
 
 
 if __name__ == '__main__':
