@@ -2,12 +2,12 @@ import sys
 import os
 import time
 import json
-
-import telegram
 import logging
-import requests
 
 from http import HTTPStatus
+
+import telegram
+import requests
 
 from dotenv import load_dotenv
 
@@ -45,6 +45,24 @@ class APIResponseError(Exception):
     pass
 
 
+class RequestResponseError(Exception):
+    """Исключение для ошибок при запросе."""
+
+    pass
+
+
+class WrongResponseStatusError(Exception):
+    """Исключение для ошибок при запросе."""
+
+    pass
+
+
+class InsufficientTokensError(Exception):
+    """Исключение для отсутствующих токенов."""
+
+    pass
+
+
 def check_tokens():
     """Проверяет доступность переменных окружения."""
     tokens = [
@@ -52,15 +70,27 @@ def check_tokens():
         TELEGRAM_TOKEN,
         TELEGRAM_CHAT_ID
     ]
-
-    for token in tokens:
+    missing_tokens = []
+    for index, token in enumerate(tokens):
         if not token:
             logger.critical(
-                f'Insufficient token: {token}',
+                f'Insufficient token: {tokens[index]}',
                 exc_info=True
             )
-            return False
-    return True
+            missing_tokens.append(tokens[index])
+    if not missing_tokens:
+        return True
+    # Сначала подумал, что надо помимо первого лога токена
+    # вывести ещё разом все остальные, но потом понял, что у
+    # меня просто цикл обрывался сразу после первого отсутствующего
+    # токена. Не уверен, что эту информацию надо дублировать два раза,
+    # но логгирование всех токенов отдельно на всякий случай тут
+    # оставлю, если что - удалю.
+    # logger.critical(
+    #     f'All missing tokens: {missing_tokens}',
+    #     exc_info=True
+    # )
+    return False
 
 
 def send_message(bot, message):
@@ -83,30 +113,20 @@ def get_api_answer(timestamp):
             headers=HEADERS,
             params={'from_date': timestamp}
         )
-        # Думал такой конструкцией проверять ошибку при получении
-        # ответа(RequestException для этого не подойдёт?), но судя по
-        # всему, из-за того, что в тестах используются данного типа -
-        # на тестах получаю ошибку.
-        # if not isinstance(api_answer, requests.Response):
-        #     raise APIResponseError(
-        #         f'Wrong response: {type(api_answer)}'
-        #     )
-        if api_answer.status_code != HTTPStatus.OK:
-            raise APIResponseError(
-                f'Failed request: {api_answer}. '
-                f'Status code: {api_answer.status_code}.'
-            )
-        try:
-            return api_answer.json()
-        except json.JSONDecodeError:
-            raise APIResponseError('Response is not parsable')
+    # Добавил к каждой ошибке свой класс исключений
     except requests.RequestException as error:
-        logger.error(f'Request error: {error}', exc_info=True)
-        # Пытался добавлять RequestException в raise,
-        # так не работало - получаю ошибку о том, что
-        # при таком исключении оно не обрабатывается.
-        # Добавил кастомный класс исключений - тест прошёл.
-        raise APIResponseError(f'Request error: {error}')
+        raise RequestResponseError(f'Request {api_answer} failed '
+                                   f'with params: {timestamp}. '
+                                   f'Error: {error}.')
+    if api_answer.status_code != HTTPStatus.OK:
+        raise WrongResponseStatusError(
+            f'Failed request: {api_answer}. '
+            f'Status code: {api_answer.status_code}.'
+        )
+    try:
+        return api_answer.json()
+    except json.JSONDecodeError:
+        raise APIResponseError('Response is not parsable')
 
 
 def check_response(response):
@@ -125,18 +145,19 @@ def check_response(response):
 
 def parse_status(homework):
     """Извлекает статус домашней работы."""
-    if isinstance(homework, dict):
-        if 'homework_name' in homework:
-            homework_name = homework.get('homework_name')
-        else:
-            raise KeyError('Homework not found')
-    else:
+    if not isinstance(homework, dict):
         raise TypeError('Homework is not a dict')
+    if 'homework_name' not in homework:
+        raise KeyError('Homework not found')
+    homework_name = homework.get('homework_name')
     try:
-        verdict = HOMEWORK_VERDICTS[homework.get('status')]
+        status = homework.get('status')
     except KeyError:
-        raise KeyError('Status is not recognized')
-
+        KeyError('Got no status from homework')
+    try:
+        verdict = HOMEWORK_VERDICTS[status]
+    except KeyError:
+        raise KeyError(f'Status is not recognized{status}')
     if verdict == 'rejected':
         return homework.get('reviewer_comment')
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
@@ -144,10 +165,9 @@ def parse_status(homework):
 
 def main():
     """Основная логика работы бота."""
-    if check_tokens():
-        bot = telegram.Bot(token=TELEGRAM_TOKEN)
-    else:
-        raise SystemExit('Insufficient tokens')
+    if not check_tokens():
+        raise InsufficientTokensError('Insufficient tokens')
+    bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     previous_status = ''
 
@@ -155,7 +175,12 @@ def main():
         try:
             response = get_api_answer(timestamp)
             homework = check_response(response)
-            status = parse_status(homework)
+            try:
+                status = parse_status(homework)
+            except TypeError:
+                logger.debug('Homework not found', exc_info=True)
+                time.sleep(RETRY_PERIOD)
+                continue
             if status == previous_status:
                 logger.debug('No new statuses found', exc_info=True)
                 continue
