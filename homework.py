@@ -136,7 +136,7 @@ def check_response(response):
         raise TypeError(f'homeworks is not a list: {type(homework)}')
     if homework:
         return homework[0]
-    raise EmptyListError('Homework is empty')
+    logger.debug('Homework is empty', exc_info=True)
 
 
 def parse_status(homework):
