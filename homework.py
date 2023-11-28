@@ -65,31 +65,21 @@ class InsufficientTokensError(Exception):
 
 def check_tokens():
     """Проверяет доступность переменных окружения."""
-    tokens = [
-        PRACTICUM_TOKEN,
-        TELEGRAM_TOKEN,
-        TELEGRAM_CHAT_ID
-    ]
+    tokens = {
+        'PRACTICUM_TOKEN': PRACTICUM_TOKEN,
+        'TELEGRAM_TOKEN': TELEGRAM_TOKEN,
+        'TELEGRAM_CHAT_ID': TELEGRAM_CHAT_ID
+    }
     missing_tokens = []
-    for index, token in enumerate(tokens):
-        if not token:
+    for key, value in tokens.items():
+        if not value:
             logger.critical(
-                f'Insufficient token: {tokens[index]}',
+                f'Insufficient token: {key}',
                 exc_info=True
             )
-            missing_tokens.append(tokens[index])
+            missing_tokens.append(key)
     if not missing_tokens:
         return True
-    # Сначала подумал, что надо помимо первого лога токена
-    # вывести ещё разом все остальные, но потом понял, что у
-    # меня просто цикл обрывался сразу после первого отсутствующего
-    # токена. Не уверен, что эту информацию надо дублировать два раза,
-    # но логгирование всех токенов отдельно на всякий случай тут
-    # оставлю, если что - удалю.
-    # logger.critical(
-    #     f'All missing tokens: {missing_tokens}',
-    #     exc_info=True
-    # )
     return False
 
 
@@ -178,7 +168,7 @@ def main():
             try:
                 status = parse_status(homework)
             except TypeError:
-                logger.debug('Homework not found', exc_info=True)
+                logger.debug('Homework is not a dict', exc_info=True)
                 time.sleep(RETRY_PERIOD)
                 continue
             if status == previous_status:
