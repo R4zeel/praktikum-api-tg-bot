@@ -63,6 +63,12 @@ class InsufficientTokensError(Exception):
     pass
 
 
+class EmptyListError(Exception):
+    """Исключение при отсутствии элементов в списке."""
+
+    pass
+
+
 def check_tokens():
     """Проверяет доступность переменных окружения."""
     tokens = {
@@ -130,7 +136,7 @@ def check_response(response):
         raise TypeError(f'homeworks is not a list: {type(homework)}')
     if homework:
         return homework[0]
-    return homework
+    raise EmptyListError('Homework is empty')
 
 
 def parse_status(homework):
