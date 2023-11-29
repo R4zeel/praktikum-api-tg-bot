@@ -134,8 +134,7 @@ def check_response(response):
         raise APIResponseError(f'{response}')
     if not isinstance(response['homeworks'], list):
         raise TypeError(f'homeworks is not a list: {type(homework)}')
-    if homework:
-        return homework[0]
+    return homework
     logger.debug('Homework is empty', exc_info=True)
 
 
@@ -165,22 +164,17 @@ def main():
         raise InsufficientTokensError('Insufficient tokens')
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
-    previous_status = ''
 
     while True:
         try:
             response = get_api_answer(timestamp)
-            homework = check_response(response)
-            try:
-                status = parse_status(homework)
-            except TypeError:
-                logger.debug('Homework is not a dict', exc_info=True)
-                time.sleep(RETRY_PERIOD)
-                continue
-            if status == previous_status:
+            homework_list = check_response(response)
+            if not homework_list:
                 logger.debug('No new statuses found', exc_info=True)
+                time.sleep(RETRY_PERIOD)
+                timestamp = int(time.time())
                 continue
-            previous_status = status
+            status = parse_status(homework_list[0])
             send_message(bot, status)
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
