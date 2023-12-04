@@ -171,8 +171,6 @@ def main():
             homework_list = check_response(response)
             if not homework_list:
                 logger.debug('No new statuses found', exc_info=True)
-                time.sleep(RETRY_PERIOD)
-                timestamp = int(time.time())
                 continue
             status = parse_status(homework_list[0])
             send_message(bot, status)
@@ -180,8 +178,9 @@ def main():
             message = f'Сбой в работе программы: {error}'
             logger.error(error, exc_info=True)
             send_message(bot, message)
-        time.sleep(RETRY_PERIOD)
-        timestamp = int(time.time())
+        finally:
+            time.sleep(RETRY_PERIOD)
+            timestamp = int(time.time())
 
 
 if __name__ == '__main__':
